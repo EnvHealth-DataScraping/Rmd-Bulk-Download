@@ -1,0 +1,247 @@
+Title: RMarkdown code for bulk download of datasets and other files from a URL directory
+Date: 2025-01-28
+Name: Pragyan Khanal
+
+Use for web pages with lots of data file links, similar to below:
+* https://www.ncei.noaa.gov/pub/data/cirs/climdiv
+* https://downloads.psl.noaa.gov/Projects/EDDI/CONUS_archive/data/2025
+* https://data.hrsa.gov/data/download
+
+Important steps:
+* Define 'local_path' in Chunk 3
+* Define 'url' in Chunk 4
+* Define 'keep_extensions' in Chunk 5
+* Add additional filters if needed for 'files' in Chunk 5
+* Add additional filters if needed for 'url_files' in Chunk 6
+* Total download file size calculated and duplicate files checked for in Chunk 7
+
+# Libraries
+
+```{r}
+
+# Define libraries needed
+libraries <- c(
+  "magrittr" # for %>% operator
+  , "rvest"   # for scraping
+  , "httr"    # for sending HTTP requests and inspecting response headers
+  )
+
+# Install library if not already, then load
+for (lib in libraries) {
+  if (!require(lib, character.only = TRUE)) {
+    install.packages(lib)
+  }
+  library(lib, character.only = TRUE)
+}
+
+```
+
+# Define functions
+
+```{r}
+
+# Function to get the file size from the HTTP headers
+get_file_size <- function(url) {
+  tryCatch({
+    response <- HEAD(url, timeout(10))  # Add timeout to avoid long waits
+    if (http_error(response)) {
+      warning(paste("Failed to access:", url))
+      return(NA)
+    }
+    size <- as.numeric(headers(response)[["content-length"]])
+    if (!is.na(size)) {
+      return(size / (1024^2))  # Convert bytes to MB
+    } else {
+      warning(paste("No content-length for:", url))
+      return(NA)
+    }
+  }, error = function(e) {
+    warning(paste("Error with URL:", url, ":", e$message))
+    return(NA)
+  })
+}
+
+
+# Function to download and extract files from urls
+download_and_extract <- function(local_dir, full_urls) {
+  for (file in full_urls) {
+    # Extract the file name from the end of the full url and
+    # replace '%20' url encoding with blank space
+    file_name <- basename(file) %>% gsub("%20", " ", .)
+    # Construct a local path to the file
+    file_local_path <- file.path(local_dir, file_name)
+    
+    # Check if the file exists before downloading
+    if (!file.exists(file_local_path)) {
+      cat("Checking", file, "\n")
+      download.file(file, destfile = file_local_path)
+      message(file_name, " downloaded successfully.\n")
+    } else {
+      cat("Checking", file, "\n")
+      message(file_name, " already exists. Skipping download.\n")
+    }
+    
+    # Check if file is a .tar.gz file and extract if true
+    if (grepl("\\.tar\\.gz$", file_local_path)) {
+      untar(file_local_path, exdir = local_dir)
+    }
+  }
+}
+
+```
+
+# Create local destination path
+
+```{r}
+
+# ** UPDATE HERE **
+# Define local path where to download data sets to; remove trailing '/'
+local_path <- "C:/Users/zzzzz/Documents/zzzzz" 
+stopifnot("Remove trailing '/'" = substr(local_path, nchar(local_path), nchar(local_path)) != "/")
+
+
+# Add today's download date to path
+local_path_dated <- paste(local_path, format(Sys.Date(), "%Y-%m-%d"), sep = "/")
+print(local_path_dated)
+
+# Create directory
+dir.create(local_path_dated, showWarnings = TRUE)
+
+```
+
+# Scrape website for links
+
+```{r}
+
+# ** UPDATE HERE **
+# Define the source URL; remove trailing '/'
+url <- "https://zzzzz.gov/zzzzz"
+stopifnot("Remove trailing '/'" = substr(url, nchar(url), nchar(url)) != "/")
+
+# Extract all the links from the url
+links <- url %>%
+  # Scrape the url to get an HTML webpage
+  read_html(.) %>% 
+  # Select hyperlinks; "a" is CSS tag for hyperlinks
+  html_elements(., "a") %>%
+  # Retrieve trailing URL of the linked page, i.e., href attribute
+  html_attr(., "href") 
+print(links)
+
+# Extract all file extensions from links
+links_extensions <- links %>%
+  # Extract string including and after '.'
+  sub(".*(\\..+)", "\\1", .) %>%
+  # Remove elements without '.'
+  .[grepl("\\.", .)] %>%
+  # Remove any duplicates
+  unique(.)
+print(links_extensions)
+# May include .gov, .com, etc. sites. Define specific extensions in 'keep_extensions'
+
+```
+
+# Define web files
+
+```{r}
+
+# ** UPDATE HERE **
+# Define file extensions to keep; keep leading '.'; can ignore capitalization
+keep_extensions <- c(".extension1",".extension2",".etc")
+stopifnot("Add leading '.' to 'keep_extensions' elements" = all(substr(keep_extensions, 1, 1) == "."))
+print(keep_extensions)
+
+# Create a regex pattern for extensions of interest
+pattern <- paste0(keep_extensions, collapse = "$|") %>%
+  paste0("(", ., "$)")
+print(pattern)
+
+# Filter out links keeping only those that link to files
+files <- links %>%
+  # Keep only those ending with the desired file extensions
+  .[grepl(pattern, ., ignore.case = TRUE)] %>%
+  # Remove directories that start with '/'
+  .[!grepl("^\\/", .)] %>%
+  # Remove any duplicates
+  unique(.)
+print(files)
+
+# Check removed links and update 'keep_extensions' or filters defining 'files'
+# if a desired file was removed
+links_removed <- unique(links[!links %in% files])
+print(links_removed)
+
+```
+
+# Define web file paths
+
+```{r}
+  
+# Define full url for each file of interest
+url_files <- files %>%
+  # Add '/' to beginning, except if already there or if a webpage
+  ifelse(substr(., 1, 1) == "/" | substr(., 1, 4) == "http", ., paste0("/", .)) %>%
+  # Add 'url' to beginning, except if already a webpage
+  paste0(ifelse(substr(., 1, 4) == "http","",url), .) %>%
+  # Replace ' ' with '%20' to properly encode blank spaces in URLs
+  gsub(" ", "%20", .) %>%
+  # Remove any duplicates
+  unique(.)
+print(url_files)
+# Ensure that all links appear to be to for a file of interest
+# Otherwise refine filters for 'files' object or update 'keep_extensions'
+
+
+# # Additional filters for 'files' step if needed
+# # Remove headers that start with '?'
+# .[!grepl("^\\?", .)] %>%
+# # Remove links to other sites that start with 'http'
+# .[!grepl("^\\http", .)] %>%
+# # Remove dead ends defined as just '#' 
+# .[.!="#"] %>%
+
+```
+
+# Check file sizes and for duplicates
+
+```{r}
+
+# Get file sizes for all URLs
+file_sizes <- sapply(url_files, get_file_size)
+
+# Print total size
+message("Total estimated file size: ", round(sum(file_sizes, na.rm = TRUE), 2), " MB\n"
+    , "*** Note: Actual total file size may be larger\n"
+    , "*** ", length(file_sizes[is.na(file_sizes)]), " / "
+    , length(file_sizes)
+    , " = ", round(length(file_sizes[is.na(file_sizes)]) / length(file_sizes) * 100, 2)
+    , " % of files were unable to obtain size from HTTP headers"
+    )
+
+# Check basenames and identify duplicates
+# Multiple files downloaded of the same name will overwrite each other with no
+# guarantee that the desired version is retained, so duplicate files
+# should be resolved before downloading.
+dup_url_files_basenames <- basename(url_files) %>% .[duplicated(.)]
+stopifnot(
+"Duplicate files identified.
+Check 'files' and 'url_files' and apply further filters to resolve.
+
+Suggestions:
+* Copy/paste full URLs from 'url_files' of duplicates identified in 'dup_url_files_basenames'.
+  - This can help identify any URL format patterns of the desired or undesired files.
+* Examine the 'file_sizes' output to see if files of the same basename have very different sizes.
+  - This can help identify any URLs of files that may just be downloading an Error Message webpage HTML
+    and thus any URL format patterns of the desired or undesired files."
+= length(dup_url_files_basenames) == 0)
+
+```
+
+# Run 'download_and_extract' function
+
+```{r}
+
+## *** Consider running function with a subset of url_files to first test ***
+download_and_extract(local_dir = local_path_dated, full_urls = url_files)
+
+```
